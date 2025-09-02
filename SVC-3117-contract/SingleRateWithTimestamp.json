@@ -1,0 +1,22 @@
+{
+  "timestamp": "2025-09-02T20:15:02.579Z",
+  "rate": {
+    "carrier": "653309",
+    "port_destination": 648392,
+    "port_origin": 653438,
+    "port_discharge": 648392,
+    "port_origin_name": "KAOHSIUNG",
+    "port_discharge_name": "LOS ANGELES",
+    "vf": "2025-02-15",
+    "vt": "2025-12-31",
+    "transit_time": "",
+    "rate_source": "653309",
+    "40p": 2450,
+    "40hqp": 2450,
+    "20p": 1840,
+    "service": "337",
+    "service_name": "Guangdong Express",
+    "contract": "39",
+    "carrier_contract_number": "SVC3117"
+  }
+}

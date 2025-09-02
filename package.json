@@ -1,0 +1,31 @@
+{
+  "name": "cma-ratesheet-parser",
+  "version": "1.0.0",
+  "description": "CMA Ratesheet Parser",
+  "main": "index.js",
+  "engines": {
+    "node": ">=22.3.0"
+  },
+  "type": "module",
+  "scripts": {
+    "start": "node ./index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/primefreight/cma-ratesheet-parser.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/primefreight/cma-ratesheet-parser/issues"
+  },
+  "homepage": "https://github.com/primefreight/cma-ratesheet-parser#readme",
+  "dependencies": {
+    "apify": "^3.4.1",
+    "axios": "^1.8.4",
+    "crawlee": "^3.13.3",
+    "playwright": "^1.52.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

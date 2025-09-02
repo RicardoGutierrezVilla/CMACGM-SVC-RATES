@@ -1,0 +1,7 @@
+[submodule "CMA-CGM-SVC3117"]
+    path = CMA-CGM-SVC3117
+    url = <whatever-url>
+[submodule "CMA-CGM-SVC3118"]
+    path = CMA-CGM-SVC3118
+    url = <whatever-url>
+

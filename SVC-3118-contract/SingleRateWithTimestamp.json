@@ -1,0 +1,22 @@
+{
+  "timestamp": "2025-07-29T13:25:56.524Z",
+  "rate": {
+    "carrier": "653309",
+    "port_destination": 648392,
+    "port_origin": 649295,
+    "port_discharge": 648392,
+    "port_origin_name": "YANTIAN",
+    "port_discharge_name": "LOS ANGELES",
+    "vf": "2025-02-15",
+    "vt": "2025-12-31",
+    "transit_time": "",
+    "rate_source": "653309",
+    "40p": 1531,
+    "40hqp": 1531,
+    "20p": 1378,
+    "service": "337",
+    "service_name": "Guangdong Express",
+    "contract": "38",
+    "carrier_contract_number": "SVC3118"
+  }
+}

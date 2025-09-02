@@ -1,0 +1,7 @@
+node_modules/
+tests/
+/resources/*.log
+/output/
+/QHOF-FAK-contract/*.xlsx
+live_test/
+old_versions/
