@@ -147,7 +147,7 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
 
     // Limits
     const maxApiCallsPerRun = 30;
-    const maxRatesToSendPerRun = 1000;
+    const maxRatesToSendPerRun = 1;
     const sendAllRates = (typeof sendAllOpt === 'boolean') ? sendAllOpt : true; // default true
     const missingServices = [];
     const newSheetEntries = [];
