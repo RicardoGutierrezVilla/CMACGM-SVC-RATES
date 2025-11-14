@@ -1,9 +1,8 @@
-import { parseQHOFFile } from "./QHOF-FAK-contract/parser.js";
 import {
   readFileSync,
   writeFileSync,
-  unlink,
   promises as fsPromises,
+  existsSync,
 } from "fs";
 import axios from "axios";
 import * as XLSX from "xlsx";
@@ -14,11 +13,11 @@ import { Actor } from "apify";
  * Function to get the latest rate sheet from SFTP
  * @returns Filename / null
  */
-async function getFile() {
+async function getFile(ratesheetUrl) {
   try {
     const result = await axios.request({
       responseType: "arraybuffer",
-      url: "https://www.primefreight.com/cma_rates/ratesheet.xlsx",
+      url: ratesheetUrl || "https://www.primefreight.com/cma_rates/ratesheet.xlsx",
       method: "get",
       headers: {
         "Content-Type": "blob",
@@ -96,43 +95,45 @@ function isQHOFContract(workbook, fileName) {
   return false;
 }
 
-async function forwardSVContract(workbook, fileName) {
+async function forwardSVContract({ workbook, fileName, mode }) {
   try {
-    // Look for "Cover" sheet to determine 3117 or 3118
-    const sheetName = workbook.SheetNames.find(name => name.toLowerCase().includes("cover"));
-    let is3117 = false;
-    if (sheetName) {
-      const coverSheet = workbook.Sheets[sheetName];
-      const jsonData = XLSX.utils.sheet_to_json(coverSheet, { header: 1, defval: "" });
-      console.log(`File ${fileName}: Checking '${sheetName}' sheet for SVC type (3117 or 3118)`);
-      for (const row of jsonData) {
-        if (!row) continue;
-        for (const cell of row) {
-          if (cell === null || cell === undefined) continue;
-          const cellValue = cell.toString();
-          if (cellValue.includes("3117")) {
-            is3117 = true;
-            console.log(`File ${fileName}: Identified as SVC 3117 contract`);
-            break;
-          } else if (cellValue.includes("3118")) {
-            console.log(`File ${fileName}: Identified as SVC 3118 contract`);
-            break;
+    // Decide runner by explicit mode or detect via cover sheet
+    let target = mode;
+    if (!target) {
+      const sheetName = workbook.SheetNames.find((name) =>
+        name.toLowerCase().includes("cover")
+      );
+      let is3117 = false;
+      if (sheetName) {
+        const coverSheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(coverSheet, {
+          header: 1,
+          defval: "",
+        });
+        for (const row of jsonData) {
+          if (!row) continue;
+          for (const cell of row) {
+            if (cell === null || cell === undefined) continue;
+            const cellValue = cell.toString();
+            if (cellValue.includes("3117")) {
+              is3117 = true;
+              break;
+            }
           }
+          if (is3117) break;
         }
-        if (is3117) break;
       }
-    } else {
-      console.log(`File ${fileName}: No 'cover' sheet found, defaulting to SVC-3118`);
+      target = is3117 ? "SVC_3117_CONTRACT" : "SVC_3117_FEEDER";
     }
 
-    if (is3117) {
-      const { main } = await import("./SVC-3117-contract/main.js");
-      await main(workbook, fileName);
+    if (target === "SVC_3117_CONTRACT") {
+      await import("./SVC-3117-contract/main.js");
       console.log(`Forwarded to SVC-3117-contract/main.js for file: ${fileName}`);
+    } else if (target === "SVC_3117_FEEDER") {
+      await import("./SVC-3117-Feeder/main.js");
+      console.log(`Forwarded to SVC-3117-Feeder/main.js for file: ${fileName}`);
     } else {
-      const { main } = await import("./SVC-3118-contract/main.js");
-      await main(workbook, fileName);
-      console.log(`Forwarded to SVC-3118-contract/main.js for file: ${fileName}`);
+      throw new Error(`Unknown mode: ${target}`);
     }
   } catch (error) {
     await sendErrorMessage(`ERROR in forwarding SVC contract for file ${fileName}: ${error}`);
@@ -141,13 +142,24 @@ async function forwardSVContract(workbook, fileName) {
 }
 
 async function main() {
+  const input = (await Actor.getInput()) || {};
+  const {
+    ratesheetUrl,
+    mode, // "AUTO" | "SVC_3117_CONTRACT" | "SVC_3117_FEEDER"
+    delayBeforeMs = 0,
+    pushResults = true,
+  } = input;
+
+  if (delayBeforeMs && Number(delayBeforeMs) > 0) {
+    console.log(`Waiting ${delayBeforeMs} ms before processing...`);
+    await new Promise((res) => setTimeout(res, Number(delayBeforeMs)));
+  }
   // 1. Get the file
-  const fileName = await getFile();
+  const fileName = await getFile(ratesheetUrl);
 
   if (fileName === null) {
     await sendErrorMessage(`Filename from SFTP is null`);
     console.error(`ERROR: No file to process, filename is null`);
-    await Actor.exit();
     return;
   }
 
@@ -158,24 +170,9 @@ async function main() {
   // At this point, the file is open
   console.log(`File ${fileName}: Successfully loaded into workbook`);
 
-  if (isQHOFContract(workbook, fileName)) {
-    console.log(`QHOF Contract identified for file: ${fileName}`);
-    await parseQHOFFile(workbook)
-      .then(async (parsedData) => {
-        await sendErrorMessage(parsedData[0]);
-        console.log(`QHOF data parsed for file: ${fileName}`);
-        for (const row of parsedData) {
-          // Temporarily commented out for testing
-          // sendJSONToFCLEndpoint(row);
-        }
-      })
-      .catch(async (error) => {
-        await sendErrorMessage(`ERROR IN QHOF CONTRACT PARSER for file ${fileName}: ${error}`);
-        console.error(`ERROR: QHOF parsing failed for file ${fileName}: ${error}`);
-      });
-  } else if (isSVContract(workbook, fileName)) {
+  if (isSVContract(workbook, fileName)) {
     console.log(`SVC Contract identified for file: ${fileName}`);
-    await forwardSVContract(workbook, fileName);
+    await forwardSVContract({ workbook, fileName, mode: mode === "AUTO" ? undefined : mode });
   } else {
     // Send error message and log if neither QHOF nor SVC
     const errorMsg = `Contract was not identified and therefore not sent out for file: ${fileName}`;
@@ -190,7 +187,31 @@ async function main() {
     await sendErrorMessage(`APIFY: Error deleting file ${fileName}: ${error}`);
     console.error(`ERROR: Failed to delete file ${fileName}: ${error}`);
   }
-  await Actor.exit();
+
+  if (pushResults) {
+    const candidates = [
+      "SVC-3117-contract/FinalRatesToEndpoint.json",
+      "SVC-3117-Feeder/FinalRatesToEndpoint.json",
+      "FinalRatesToEndpoint.json",
+    ];
+    for (const p of candidates) {
+      try {
+        if (existsSync(p)) {
+          const json = JSON.parse(readFileSync(p, "utf8"));
+          if (Array.isArray(json)) {
+            await Actor.pushData(json);
+            console.log(`Pushed ${json.length} items from ${p} to dataset.`);
+          } else {
+            await Actor.pushData(json);
+            console.log(`Pushed object result from ${p} to dataset.`);
+          }
+          break;
+        }
+      } catch (e) {
+        console.warn(`Could not push results from ${p}: ${e}`);
+      }
+    }
+  }
 }
 
 // Actor initialization

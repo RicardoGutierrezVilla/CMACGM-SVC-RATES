@@ -1,0 +1,34 @@
+{
+  "title": "CMA/CGM Ratesheet Parser Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "ratesheetUrl": {
+      "title": "Ratesheet URL",
+      "type": "string",
+      "description": "Optional URL of the CMA/CGM ratesheet .xlsx file.",
+      "default": "https://www.primefreight.com/cma_rates/ratesheet.xlsx"
+    },
+    "mode": {
+      "title": "Processing Mode",
+      "type": "string",
+      "enum": ["AUTO", "SVC_3117_CONTRACT", "SVC_3117_FEEDER"],
+      "description": "AUTO attempts to detect 3117 vs feeder via Cover sheet; otherwise force a specific path.",
+      "default": "AUTO"
+    },
+    "delayBeforeMs": {
+      "title": "Delay Before Start (ms)",
+      "type": "integer",
+      "description": "Optional delay before processing begins, in milliseconds.",
+      "default": 0,
+      "minimum": 0
+    },
+    "pushResults": {
+      "title": "Push Results To Dataset",
+      "type": "boolean",
+      "description": "If enabled, attempts to push FinalRatesToEndpoint.json to the default dataset.",
+      "default": true
+    }
+  },
+  "required": []
+}
