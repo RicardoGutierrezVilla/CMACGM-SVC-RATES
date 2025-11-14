@@ -35,6 +35,7 @@ function getPortGroupDictionary() {
     };
 }
 
+// Extract 'General Surcharges (VALID)' descriptions from the USWC sheet (Feeder)
 function extractGeneralSurchargesValidFromRows(rows) {
     const isKeyCell = (value) => {
         if (!value || typeof value !== 'string') return false;
@@ -53,7 +54,7 @@ function extractGeneralSurchargesValidFromRows(rows) {
     if (!rows || rows.length === 0) return [];
     const keyRowIndex = rows.findIndex(r => Array.isArray(r) && r.some(isKeyCell));
     if (keyRowIndex === -1) {
-        console.warn('General Surcharges (VALID) key not found on USWC sheet.');
+        console.warn('General Surcharges (VALID) key not found on USWC Feeder sheet.');
         return [];
     }
 
@@ -71,7 +72,7 @@ function extractGeneralSurchargesValidFromRows(rows) {
         }
     }
     if (headerRowIndex === -1) {
-        console.warn('General Surcharges (VALID) header not found near key on USWC sheet.');
+        console.warn('General Surcharges (VALID) header not found near key on USWC Feeder sheet.');
         return [];
     }
 
@@ -120,7 +121,16 @@ function extractGeneralSurchargesValidFromRows(rows) {
 
 function findLocationId(locationName, records) {
     if (!locationName) return { id: null, reason: 'Location name is empty or null' };
-    const searchName = locationName.trim().toLowerCase();
+    // Alias mapping for common alternate names
+    const aliasMap = {
+        'HO CHI MINH CITY': 'Ho Chi Minh',
+        // Add more aliases here as needed
+    };
+    let searchName = locationName.trim();
+    if (aliasMap[searchName.toUpperCase()]) {
+        searchName = aliasMap[searchName.toUpperCase()];
+    }
+    searchName = searchName.toLowerCase();
     for (const record of records) {
         for (const key in record) {
             if (key === 'id') continue;
@@ -164,14 +174,14 @@ async function processUSWCSheet(workbook, contractEffectiveDate, contractExpirat
     const worksheet = workbook.Sheets[sheetName];
     const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-    // Extract VALID general surcharges from this USWC sheet
+    // Extract VALID general surcharges from this USWC feeder sheet
     let generalSurchargesDescriptions = [];
     try {
         const validSurcharges = extractGeneralSurchargesValidFromRows(data);
         generalSurchargesDescriptions = validSurcharges.map(s => s.description).filter(Boolean);
-        console.log('USWC General Surcharges (VALID) Descriptions:', JSON.stringify(generalSurchargesDescriptions));
+        console.log('USWC Feeder General Surcharges (VALID) Descriptions:', JSON.stringify(generalSurchargesDescriptions));
     } catch (e) {
-        console.warn('USWC General Surcharges extraction failed:', e && e.message ? e.message : e);
+        console.warn('USWC Feeder General Surcharges extraction failed:', e && e.message ? e.message : e);
     }
 
     const requiredColumns = ['POL', 'POD', 'Place of Delivery', 'Curr', 'D20', 'D40'];
@@ -402,18 +412,197 @@ async function processUSWCSheet(workbook, contractEffectiveDate, contractExpirat
     console.log("\nChecking for rates with unwanted cities...");
     const processedRates = finalRates.filter(rate => {
         // Log if we find a rate with unwanted cities
-        const unwantedPortIds = ["649220", "657530", "657528", "656284", "657301"];
+        const unwantedPortIds = ["649220", "657528", "656284", "657301"];
         if (unwantedPortIds.includes(String(rate["Place of Delivery"]))) {
         }
         return rate.POL && rate.POD && (rate["Place of Delivery"] || !rate.originalPlaceOfDelivery);
     }).filter(rate => {
-        const unwantedPortIds = ["649220", "657528", "656284", "657301", "660208"]; // blocking new york,indiannapolis,st louis, charlotte,norfolk   baltimore, charlotte, new york, norfolk and st louis
+        const unwantedPortIds = ["649220", "657528", "656284", "657301", "660208"]; // blocking new york,st louis, charlotte,norfolk   baltimore, charlotte, new york, norfolk and st louis
         return !unwantedPortIds.includes(String(rate["Place of Delivery"]));
     });
 
+    // Log the first processed rate to show the structure
+    if (processedRates.length > 0) {
+        console.log("\n=== FIRST PROCESSED RATE STRUCTURE ===");
+        console.log(JSON.stringify(processedRates[0], null, 2));
+        console.log("=====================================\n");
+    } else {
+        console.log("\nNo processed rates found!");
+    }
 
+    // === NEW TABLE EXTRACTION ===
+    // Find the header row for the new table
+    const newTableRequiredColumns = ['COUNTRY', 'Place of Receipt', 'POL', 'D20', 'D40'];
+    const newTableHeaderRowIndex = data.findIndex(row => {
+        if (!row || row.length === 0) return false;
+        // Only require COUNTRY, Place of Receipt, POL to find the header
+        return ['COUNTRY', 'Place of Receipt', 'POL'].every(col =>
+            row.some(cell => typeof cell === 'string' && cell.replace(/\s+/g, '').toLowerCase().includes(col.replace(/\s+/g, '').toLowerCase()))
+        );
+    });
+
+    let newTable = [];
+    if (newTableHeaderRowIndex !== -1) {
+        const newTableHeaderRow = data[newTableHeaderRowIndex].map(cell => (typeof cell === 'string' ? cell.trim() : cell));
+        // Map columns (look for all 4 columns)
+        const newTableColumnMap = {};
+        ['POL', 'Place of Receipt', 'D20', 'D40'].forEach(col => {
+            const idx = newTableHeaderRow.findIndex(header =>
+                typeof header === 'string' && header.replace(/\s+/g, '').toLowerCase().includes(col.replace(/\s+/g, '').toLowerCase())
+            );
+            if (idx !== -1) newTableColumnMap[col] = idx;
+        });
+        // Collect rows
+        for (let i = newTableHeaderRowIndex + 1; i < data.length; i++) {
+            const row = data[i];
+            if (!row || row.length === 0) continue;
+            const polVal = row[newTableColumnMap['POL']];
+            const porVal = row[newTableColumnMap['Place of Receipt']];
+            const isPolEmpty = polVal == null || (typeof polVal === 'string' && polVal.trim() === "");
+            const isPorEmpty = porVal == null || (typeof porVal === 'string' && porVal.trim() === "");
+            if (isPolEmpty && isPorEmpty) break;
+            // Build row object
+            const rowObject = {};
+            Object.entries(newTableColumnMap).forEach(([col, idx]) => {
+                rowObject[col] = row[idx] !== undefined ? row[idx] : null;
+            });
+            newTable.push(rowObject);
+        }
+        // Log the new table
+        // console.log("\n=== NEW TABLE (COUNTRY, Place of Receipt, POL, D20, D40) ===");
+        if (newTable.length > 0) {
+            // console.log(JSON.stringify(newTable, null, 2));
+        } else {
+            console.log("No rows found in new table.");
+        }
+        console.log("===============================================\n");
+
+        // === For each Place of Receipt, find the lowest D20+D40, and use those values for all rows with that Place of Receipt ===
+        // First, build all rows with formatted values and ID
+        const allFeederRows = newTable.map(row => {
+            const formattedPlaceOfReceipt = row['Place of Receipt'] && typeof row['Place of Receipt'] === 'string' ? row['Place of Receipt'].split(',')[0].trim() : row['Place of Receipt'];
+            let placeOfReceiptId = null;
+            if (formattedPlaceOfReceipt && locationsData && locationsData.records) {
+                const result = findLocationId(formattedPlaceOfReceipt, locationsData.records);
+                placeOfReceiptId = result.id;
+            }
+            // Parse D20 and D40 as numbers, treat as 0 if missing or not a number
+            const d20 = row.D20 && !isNaN(Number(row.D20)) ? Number(row.D20) : 0;
+            const d40 = row.D40 && !isNaN(Number(row.D40)) ? Number(row.D40) : 0;
+            return {
+                POL: row.POL && typeof row.POL === 'string' ? row.POL.split(',')[0].trim() : row.POL,
+                'Place of Receipt': formattedPlaceOfReceipt,
+                D20: row.D20,
+                D40: row.D40,
+                'Place of Receipt ID': placeOfReceiptId,
+                _d20: d20,
+                _d40: d40
+            };
+        });
+        // Find the lowest D20+D40 for each Place of Receipt
+        const lowestByPlace = new Map();
+        allFeederRows.forEach(row => {
+            const key = row['Place of Receipt'];
+            const grandTotal = row._d20 + row._d40;
+            if (!lowestByPlace.has(key) || grandTotal < (lowestByPlace.get(key)._d20 + lowestByPlace.get(key)._d40)) {
+                lowestByPlace.set(key, { D20: row.D20, D40: row.D40, _d20: row._d20, _d40: row._d40 });
+            }
+        });
+        // For each row, set D20/D40 to the lowest for its Place of Receipt
+        let feederRates = allFeederRows.map(row => {
+            const lowest = lowestByPlace.get(row['Place of Receipt']);
+            return {
+                POL: row.POL,
+                'Place of Receipt': row['Place of Receipt'],
+                D20: lowest ? lowest.D20 : row.D20,
+                D40: lowest ? lowest.D40 : row.D40,
+                'Place of Receipt ID': row['Place of Receipt ID']
+            };
+        });
+        // Deduplicate: keep only the first occurrence for each unique 'Place of Receipt'
+        const seenPlaces = new Set();
+        feederRates = feederRates.filter(row => {
+            if (seenPlaces.has(row['Place of Receipt'])) return false;
+            seenPlaces.add(row['Place of Receipt']);
+            return true;
+        });
+        if (feederRates.length > 0) {
+            const XLSX = require('xlsx');
+            const fs = require('fs');
+            const wsFeeder = XLSX.utils.json_to_sheet(feederRates);
+            const csvFeeder = XLSX.utils.sheet_to_csv(wsFeeder);
+            // Add timestamp as the first line
+            const timestamp = new Date().toISOString();
+            const csvFeederWithTs = `Timestamp,${timestamp}\n${csvFeeder}`;
+            fs.writeFileSync('Feeder.csv', csvFeederWithTs, 'utf8');
+            console.log('Feeder.csv created/updated with new table data.');
+        }
+    } else {
+        console.log("\nNo header row found for new table (COUNTRY, Place of Receipt, POL).\n");
+    }
+
+    // === NEW processedRates with Feeder charges ===
+    // Build merged processedRates: for each feeder row, find ALL base rates for matching POL, create merged rate per Place of Receipt
+    const normalize = s => String(s || '').trim().toUpperCase();
+    let feederRatesArr = [];
+    try {
+        const feederCsv = fs.readFileSync(path.join(__dirname, 'Feeder.csv'), 'utf8');
+        const feederLines = feederCsv.split('\n').filter(Boolean);
+        const feederHeader = feederLines[0].split(',');
+        for (let i = 1; i < feederLines.length; i++) {
+            const cols = feederLines[i].split(',');
+            feederRatesArr.push({
+                POL: cols[0],
+                'Place of Receipt': cols[1],
+                D20: Number(cols[2]) || 0,
+                D40: Number(cols[3]) || 0,
+                'Place of Receipt ID': cols[4] || null
+            });
+        }
+    } catch (e) {
+        console.error('Could not load Feeder.csv:', e.message);
+    }
+    // For each feeder row, merge with ALL matching base rates
+    const mergedRates = feederRatesArr.flatMap(feeder => {
+        if (!feeder['Place of Receipt ID']) return [];
+        const matchingBases = processedRates.filter(rate => normalize(rate.polName) === normalize(feeder.POL));
+        return matchingBases.map(base => ({
+            ...base,
+            POL: feeder['Place of Receipt ID'],
+            D20: (Number(base.D20) || 0) + (Number(feeder.D20) || 0),
+            D40: (Number(base.D40) || 0) + (Number(feeder.D40) || 0),
+            feederD20: feeder.D20,
+            feederD40: feeder.D40,
+            baseD20: base.D20,
+            baseD40: base.D40,
+            feederPlaceOfReceipt: feeder['Place of Receipt'],
+            feederPlaceOfReceiptID: feeder['Place of Receipt ID'],
+            "Place of Receipt": feeder['Place of Receipt']
+        }));
+    });
+
+    // Log the first merged rate
+    if (mergedRates.length > 0) {
+        console.log('\n=== FIRST MERGED PROCESSED RATE (Base + Feeder) ===');
+        console.log(JSON.stringify(mergedRates[0], null, 2));
+        console.log('=====================================');
+    } else {
+        console.log('\nNo merged processed rates found!');
+    }
+
+    // Write BaseandFeederRates sheet
+    try {
+        const wsBaseFeeder = XLSX.utils.json_to_sheet(mergedRates);
+        const csvBaseFeeder = XLSX.utils.sheet_to_csv(wsBaseFeeder);
+        fs.writeFileSync('BaseandFeederRates.csv', csvBaseFeeder, 'utf8');
+        console.log('BaseandFeederRates.csv created/updated.');
+    } catch (e) {
+        console.error('Could not write BaseandFeederRates.csv:', e.message);
+    }
+
+    // Return mergedRates as processedRates
     return {
-        processedRates,
+        processedRates: mergedRates,
         preDictionaryRates,
         postDictionaryRates,
         uswcSurchargeDescriptions: generalSurchargesDescriptions

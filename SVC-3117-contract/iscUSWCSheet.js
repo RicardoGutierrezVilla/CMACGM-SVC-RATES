@@ -2,7 +2,6 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 
-// Simple Levenshtein distance for fuzzy matching
 function levenshteinDistance(a, b) {
     const matrix = Array(b.length + 1).fill().map(() => Array(a.length + 1).fill(0));
     for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
@@ -21,30 +20,58 @@ function levenshteinDistance(a, b) {
 }
 
 function getPortGroupDictionary() {
+    // Mirror USWC groupings
     return {
-        'BP BAL': ['XIAMEN', 'HONG KONG', 'YANTIAN'],
-        'SE ASIA BP GCFL': ['VUNG TAU', 'SINGAPORE'],
-        'GULF': ['HOUSTON', 'MOBILE', 'NEW ORLEANS'],
-        'BP JAPAN': ['NAGOYA', 'SHIMIZU', 'TOKYO', 'KOBE', 'YOKOHAMA', 'OSAKA', 'HIROSHIMA', 'MOJI', 'HAKATA/FUKUOKA'],
-        'NCPRC BP EC': ['SHANGHAI', 'NINGBO', 'QINGDAO'],
-        'SE ASIA BP EC': ['VUNG TAU', 'PORT KLANG', 'SINGAPORE', 'HAIPHONG'],
-        'BP MIA': ['PORT KLANG', 'HAIPHONG', 'YANTIAN', 'NINGBO', 'SHANGHAI', 'XIAMEN'],
-        'SPRC BP EC': ['YANTIAN', 'SHEKOU', 'XIAMEN', 'HONG KONG'],
-        'BP GCFL': ['NINGBO', 'SHANGHAI', 'XIAMEN', 'YANTIAN', 'SHEKOU'],
-        'BP BOS': ['SHANGHAI', 'NINGBO', 'QINGDAO'],
-        'FAK GCFL': ['NINGBO', 'SHANGHAI', 'XIAMEN', 'YANTIAN', 'SHEKOU'],
-        'BALTIMORE': ['BALTIMORE'],
-        'NEW YORK': ['NEW YORK'],
-        'NORFOLK': ['NORFOLK'],
-        'SAVANNAH': ['SAVANNAH'],
-        'CHARLESTON': ['CHARLESTON'],
-        'MIAMI': ['MIAMI'],
-        'TAMPA': ['TAMPA'],
-        'HALIFAX': ['HALIFAX']
+        'LAX-LGB': ['LOS ANGELES', 'LONG BEACH']
     };
 }
 
-// Extract 'General Surcharges (VALID)' descriptions from the USEC sheet
+function findLocationId(locationName, records) {
+    if (!locationName) return { id: null, reason: 'Location name is empty or null' };
+    const searchName = String(locationName).trim().toLowerCase();
+    for (const record of records) {
+        for (const key in record) {
+            if (key === 'id') continue;
+            const field = record[key];
+            if (field && typeof field.value === 'string') {
+                if (field.value.trim().toLowerCase() === searchName) {
+                    return { id: record.id, reason: null };
+                }
+            }
+        }
+    }
+    // Close match suggestion
+    let closestMatch = null;
+    let minDistance = Infinity;
+    for (const record of records) {
+        for (const key in record) {
+            if (key === 'id') continue;
+            const field = record[key];
+            if (field && typeof field.value === 'string') {
+                const distance = levenshteinDistance(searchName, field.value.trim().toLowerCase());
+                if (distance < minDistance && distance <= 3) {
+                    minDistance = distance;
+                    closestMatch = field.value;
+                }
+            }
+        }
+    }
+    const reason = closestMatch
+        ? `No exact match found for "${locationName}". Closest match: "${closestMatch}"`
+        : `No match found for "${locationName}" in LocationsBettyBlocks.json`;
+    return { id: null, reason };
+}
+
+function detectISCUSWCTabName(workbook) {
+    const names = workbook.SheetNames || [];
+    return names.find(n => {
+        const norm = n.replace(/[^a-z0-9]/gi, '').toUpperCase();
+        return norm.includes('ISCUSWC') ||
+               (n.toUpperCase().includes('ISC') && n.toUpperCase().includes('USWC'));
+    }) || null;
+}
+
+// Extract 'General Surcharges (VALID)' descriptions from the ISC-USWC sheet
 function extractGeneralSurchargesValidFromRows(rows) {
     const isKeyCell = (value) => {
         if (!value || typeof value !== 'string') return false;
@@ -63,7 +90,7 @@ function extractGeneralSurchargesValidFromRows(rows) {
     if (!rows || rows.length === 0) return [];
     const keyRowIndex = rows.findIndex(r => Array.isArray(r) && r.some(isKeyCell));
     if (keyRowIndex === -1) {
-        console.warn('General Surcharges (VALID) key not found on USEC sheet.');
+        console.warn('General Surcharges (VALID) key not found on ISC-USWC sheet.');
         return [];
     }
 
@@ -81,7 +108,7 @@ function extractGeneralSurchargesValidFromRows(rows) {
         }
     }
     if (headerRowIndex === -1) {
-        console.warn('General Surcharges (VALID) header not found near key on USEC sheet.');
+        console.warn('General Surcharges (VALID) header not found near key on ISC-USWC sheet.');
         return [];
     }
 
@@ -130,119 +157,69 @@ function extractGeneralSurchargesValidFromRows(rows) {
     return valid;
 }
 
-function findLocationId(locationName, records) {
-    if (!locationName) return { id: null, reason: 'Location name is empty or null' };
-    const searchName = locationName.trim().toLowerCase();
-    for (const record of records) {
-        for (const key in record) {
-            if (key === 'id') continue;
-            const field = record[key];
-            if (field && typeof field.value === 'string') {
-                if (field.value.trim().toLowerCase() === searchName) {
-                    return { id: record.id, reason: null };
-                }
-            }
-        }
-    }
-    const cityOnly = searchName.split(',')[0].trim();
-    for (const record of records) {
-        for (const key in record) {
-            if (key === 'id') continue;
-            const field = record[key];
-            if (field && typeof field.value === 'string') {
-                if (field.value.trim().toLowerCase() === cityOnly) {
-                    return { id: record.id, reason: null };
-                }
-            }
-        }
-    }
-    let closestMatch = null;
-    let minDistance = Infinity;
-    for (const record of records) {
-        for (const key in record) {
-            if (key === 'id') continue;
-            const field = record[key];
-            if (field && typeof field.value === 'string') {
-                const distance = levenshteinDistance(searchName, field.value.trim().toLowerCase());
-                if (distance < minDistance && distance <= 3) {
-                    minDistance = distance;
-                    closestMatch = field.value;
-                }
-            }
-        }
-    }
-    const reason = closestMatch
-        ? `No exact match found for "${locationName}". Closest match: "${closestMatch}"`
-        : `No match found for "${locationName}" in LocationsBettyBlocks.json`;
-    return { id: null, reason };
-}
-
-async function processUSECSheet(workbook, contractEffectiveDate, contractExpirationDate) {
-    console.log('Processing USEC sheet...');
-
-    if (!workbook || !workbook.SheetNames) {
-        console.error('Invalid workbook provided');
-        return { processedRates: [], preDictionaryRates: [], postDictionaryRates: [] };
-    }
-
-    const sheetName = workbook.SheetNames.find(name => name.includes('USEC'));
+async function processISCUSWCSheet(workbook, contractEffectiveDate, contractExpirationDate) {
+    const sheetName = detectISCUSWCTabName(workbook);
     if (!sheetName) {
-        console.error("No sheet found containing 'USEC'");
-        return { processedRates: [], preDictionaryRates: [], postDictionaryRates: [] };
+        console.error("No sheet found containing 'ISC' and 'USWC'");
+        return { processedRates: [], preDictionaryRates: [], postDictionaryRates: [], uswcSurchargeDescriptions: generalSurchargesDescriptions };
     }
 
     const worksheet = workbook.Sheets[sheetName];
     const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-    if (!data || !Array.isArray(data)) {
-        console.error('Invalid data in USEC sheet');
-        return { processedRates: [], preDictionaryRates: [], postDictionaryRates: [] };
-    }
-
-    // Extract VALID general surcharges from this USEC sheet
+    // Extract VALID general surcharges from this ISC-USWC sheet
     let generalSurchargesDescriptions = [];
     try {
         const validSurcharges = extractGeneralSurchargesValidFromRows(data);
         generalSurchargesDescriptions = validSurcharges.map(s => s.description).filter(Boolean);
-        console.log('USEC General Surcharges (VALID) Descriptions:', JSON.stringify(generalSurchargesDescriptions));
+        console.log('ISC-USWC General Surcharges (VALID) Descriptions:', JSON.stringify(generalSurchargesDescriptions));
     } catch (e) {
-        console.warn('USEC General Surcharges extraction failed:', e && e.message ? e.message : e);
+        console.warn('ISC-USWC General Surcharges extraction failed:', e && e.message ? e.message : e);
     }
 
-    const requiredColumns = ['POL', 'POD', 'Place of Delivery', 'Curr', 'D20', 'D40', 'Note'];
-    const headerRowIndex = data.findIndex(row => row.some(cell => requiredColumns.includes(cell)));
+    const requiredColumns = ['POL', 'POD', 'Place of Delivery', 'Curr', 'D20', 'D40'];
+    const headerRowIndex = data.findIndex(row => {
+        if (!row || row.length === 0) return false;
+        const containsFakBullets = row.some(cell =>
+            typeof cell === 'string' &&
+            cell.replace(/\s+/g, '').toUpperCase().includes('FAK/BULLETS'.replace(/\s+/g, '').toUpperCase())
+        );
+        const containsOtherHeader = row.some(cell =>
+            typeof cell === 'string' && requiredColumns.some(col => cell.toLowerCase().includes(col.toLowerCase()))
+        );
+        return containsFakBullets && containsOtherHeader;
+    });
+
     if (headerRowIndex === -1) {
-        console.error("Could not find header row with required columns in USEC sheet");
-        return { processedRates: [], preDictionaryRates: [], postDictionaryRates: [] };
+        console.error('Header row not found for ISCUSWC');
+        return { processedRates: [], preDictionaryRates: [], postDictionaryRates: [], uswcSurchargeDescriptions: generalSurchargesDescriptions };
     }
 
     const headerRow = data[headerRowIndex].map(cell => (typeof cell === 'string' ? cell.trim() : cell));
     const columnMap = {};
     requiredColumns.forEach(col => {
-        const idx = headerRow.findIndex(header => typeof header === 'string' && header.includes(col));
-        if (idx !== -1) columnMap[col] = idx;
+        const idx = headerRow.findIndex(header => typeof header === 'string' && header.toLowerCase().includes(col.toLowerCase()));
+        if (idx !== -1) columnMap[col] = idx; else console.warn(`Column "${col}" not found in header row`);
     });
 
     const output = [];
-    const routeIndices = new Map(); //  Added to track route (POL->POD->Place of Delivery) to list of indices
+    const routeIndices = new Map();
+
+    let seenData = false; // start only after the first non-empty POL
     for (let i = headerRowIndex + 1; i < data.length; i++) {
         const row = data[i];
         if (!row || row.length === 0) continue;
-
-        // Check for hidden rows
-        if (worksheet['!rows'] && worksheet['!rows'][i] && worksheet['!rows'][i].hidden) {
-            console.log(`Skipping hidden row ${i + 1}`);
-            continue;
-        }
 
         const polVal = row[columnMap['POL']];
         const podVal = row[columnMap['POD']];
         const isPolEmpty = polVal == null || (typeof polVal === 'string' && polVal.trim() === "");
         const isPodEmpty = podVal == null || (typeof podVal === 'string' && podVal.trim() === "");
-
-        if (isPolEmpty && isPodEmpty) {
-            console.log("Encountered a row with empty POL and POD; stopping processing.");
-            break;
+        // Only start considering stop-after-blank once we've seen the first data row with a POL
+        if (!seenData) {
+            if (isPolEmpty) continue; // skip initial spacer/blank rows after header
+            seenData = true;          // first data row encountered
+        } else {
+            if (isPolEmpty) break;    // stop at first blank POL after data starts
         }
 
         const rowObject = {};
@@ -250,33 +227,27 @@ async function processUSECSheet(workbook, contractEffectiveDate, contractExpirat
             rowObject[col] = row[idx] !== undefined ? row[idx] : null;
         }
 
-        //  Define the route and track indices
         const routeKey = `${rowObject.POL || ''}->${rowObject.POD || ''}->${rowObject['Place of Delivery'] || ''}`;
-        if (routeIndices.has(routeKey)) {
-            routeIndices.get(routeKey).push(output.length);
-        } else {
-            routeIndices.set(routeKey, [output.length]);
-        }
+        if (routeIndices.has(routeKey)) routeIndices.get(routeKey).push(output.length);
+        else routeIndices.set(routeKey, [output.length]);
 
         output.push(rowObject);
     }
 
-    //  Filter output to keep only the last occurrence of each route
-    const filteredOutput = [];
     const keepIndices = new Set();
-    routeIndices.forEach((indices, routeKey) => {
-        const lastIndex = indices[indices.length - 1]; // Keep the last occurrence (newest price)
-        keepIndices.add(lastIndex);
+    routeIndices.forEach(indices => keepIndices.add(indices[indices.length - 1]));
+    const filteredOutput = output.filter((_, i) => keepIndices.has(i));
+
+    // Filter out some EC cities if they appear in this tab
+    const citiesToIgnore = ['baltimore', 'charlotte', 'new york', 'norfolk'];
+    const filteredByPlace = filteredOutput.filter(row => {
+        const placeOfDelivery = row['Place of Delivery'];
+        if (!placeOfDelivery || typeof placeOfDelivery !== 'string') return true;
+        return !citiesToIgnore.some(city => placeOfDelivery.toLowerCase().trim() === city);
     });
 
-    for (let i = 0; i < output.length; i++) {
-        if (keepIndices.has(i)) {
-            filteredOutput.push(output[i]);
-        }
-    }
-
-    let rates = filteredOutput.map(rate => { // Use filteredOutput instead of output
-        ['POL', 'POD'].forEach(key => {
+    let rates = filteredByPlace.map(rate => {
+        ['POL', 'POD', 'Place of Delivery'].forEach(key => {
             if (rate[key] && typeof rate[key] === 'string') {
                 rate[key] = rate[key].split(',')[0].trim();
             }
@@ -288,16 +259,16 @@ async function processUSECSheet(workbook, contractEffectiveDate, contractExpirat
 
     const portDictionary = getPortGroupDictionary();
     rates = rates.map(rate => {
-        const newRate = { ...rate };
-        if (newRate.POL) {
-            const portGroup = portDictionary[newRate.POL];
-            if (portGroup) newRate.POL = portGroup;
+        const nr = { ...rate };
+        if (nr.POL) {
+            const g = portDictionary[nr.POL];
+            if (g) nr.POL = g;
         }
-        if (newRate.POD) {
-            const portGroup = portDictionary[newRate.POD];
-            if (portGroup) newRate.POD = portGroup;
+        if (nr.POD) {
+            const g = portDictionary[nr.POD];
+            if (g) nr.POD = g;
         }
-        return newRate;
+        return nr;
     });
 
     const postDictionaryRates = [];
@@ -306,8 +277,7 @@ async function processUSECSheet(workbook, contractEffectiveDate, contractExpirat
         const podValues = Array.isArray(rate.POD) ? rate.POD : [rate.POD];
         polValues.forEach(pol => {
             podValues.forEach(pod => {
-                const newRateRecord = { ...rate, POL: pol, POD: pod };
-                postDictionaryRates.push(newRateRecord);
+                postDictionaryRates.push({ ...rate, POL: pol, POD: pod });
             });
         });
     });
@@ -315,12 +285,12 @@ async function processUSECSheet(workbook, contractEffectiveDate, contractExpirat
     const locationsFilePath = path.join(__dirname, 'LocationsBettyBlocks.json');
     if (!fs.existsSync(locationsFilePath)) {
         console.error("LocationsBettyBlocks.json does not exist. Please fetch it first.");
-        return { processedRates: [], preDictionaryRates: [], postDictionaryRates: [] };
+        return { processedRates: [], preDictionaryRates, postDictionaryRates, uswcSurchargeDescriptions: generalSurchargesDescriptions };
     }
     const locationsData = JSON.parse(fs.readFileSync(locationsFilePath, 'utf8'));
     if (!locationsData.records || !Array.isArray(locationsData.records) || locationsData.records.length === 0) {
         console.error("LocationsBettyBlocks.json is empty or malformed.");
-        return { processedRates: [], preDictionaryRates: [], postDictionaryRates: [] };
+        return { processedRates: [], preDictionaryRates, postDictionaryRates, uswcSurchargeDescriptions: generalSurchargesDescriptions };
     }
 
     const missingLocations = [];
@@ -328,30 +298,18 @@ async function processUSECSheet(workbook, contractEffectiveDate, contractExpirat
     const finalRates = postDictionaryRates.map((rate, index) => {
         const polName = rate.POL;
         const podName = rate.POD;
-        const placeOfDeliveryName = rate['Place of Delivery'] && typeof rate['Place of Delivery'] === 'string' && rate['Place of Delivery'].trim() !== '' ? rate['Place of Delivery'] : podName;
+        const placeOfDeliveryName = rate['Place of Delivery'];
 
         const polResult = findLocationId(polName, locationsData.records);
         const polId = polResult.id;
         if (!polId) {
-            missingLocations.push({
-                location: polName,
-                type: 'POL',
-                rateIndex: index,
-                rate: `${polName} -> ${podName}`,
-                reason: polResult.reason
-            });
+            missingLocations.push({ location: polName, type: 'POL', rateIndex: index, rate: `${polName} -> ${podName}`, reason: polResult.reason });
         }
 
         const podResult = findLocationId(podName, locationsData.records);
         const podId = podResult.id;
         if (!podId) {
-            missingLocations.push({
-                location: podName,
-                type: 'POD',
-                rateIndex: index,
-                rate: `${polName} -> ${podName}`,
-                reason: podResult.reason
-            });
+            missingLocations.push({ location: podName, type: 'POD', rateIndex: index, rate: `${polName} -> ${podName}`, reason: podResult.reason });
         }
 
         let placeId = null;
@@ -361,16 +319,10 @@ async function processUSECSheet(workbook, contractEffectiveDate, contractExpirat
             placeId = placeResult.id;
             placeReason = placeResult.reason;
             if (!placeId) {
-                missingLocations.push({
-                    location: placeOfDeliveryName,
-                    type: 'Place of Delivery',
-                    rateIndex: index,
-                    rate: `${polName} -> ${podName}`,
-                    reason: placeResult.reason
-                });
+                missingLocations.push({ location: placeOfDeliveryName, type: 'Place of Delivery', rateIndex: index, rate: `${polName} -> ${podName}`, reason: placeResult.reason });
             }
         } else {
-            placeId = podId;
+            placeId = podId; // fallback
             placeReason = placeId ? null : 'Place of Delivery empty and no POD ID available';
         }
 
@@ -379,9 +331,9 @@ async function processUSECSheet(workbook, contractEffectiveDate, contractExpirat
             polName,
             podName,
             originalPlaceOfDelivery: placeOfDeliveryName,
-            'Place of Delivery': placeId,
             POL: polId,
-            POD: podId
+            POD: podId,
+            'Place of Delivery': placeId
         };
 
         if (!polId || !podId || (!placeId && placeOfDeliveryName && placeOfDeliveryName.trim() !== '')) {
@@ -391,18 +343,14 @@ async function processUSECSheet(workbook, contractEffectiveDate, contractExpirat
         return newRate;
     });
 
-    const processedRates = finalRates.filter(rate =>
-        rate.POL && rate.POD && (rate['Place of Delivery'] || !rate.originalPlaceOfDelivery)
-    );
+    const processedRates = finalRates
+        .filter(rate => rate.POL && rate.POD && (rate['Place of Delivery'] || !rate.originalPlaceOfDelivery))
+        .filter(rate => {
+            const unwantedPortIds = ["649220", "657528", "656284", "657301", "660208"];
+            return !unwantedPortIds.includes(String(rate['Place of Delivery']));
+        });
 
-    console.log('Missing locations:', missingLocations);
-
-    return {
-        processedRates,
-        preDictionaryRates,
-        postDictionaryRates,
-        uswcSurchargeDescriptions: generalSurchargesDescriptions
-    };
+    return { processedRates, preDictionaryRates, postDictionaryRates, uswcSurchargeDescriptions: generalSurchargesDescriptions };
 }
 
-module.exports = { processUSECSheet };
+module.exports = { processISCUSWCSheet };

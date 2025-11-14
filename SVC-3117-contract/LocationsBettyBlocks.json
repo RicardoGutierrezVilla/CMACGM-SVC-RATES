@@ -43,7 +43,7 @@
       },
       "ff0a74ce0a164d259adc7b11eeb77334": {
         "busy": false,
-        "value": "CNNGB"
+        "value": "CNNBO"
       }
     },
     {
@@ -89,7 +89,7 @@
       },
       "ff0a74ce0a164d259adc7b11eeb77334": {
         "busy": false,
-        "value": "CNXMN"
+        "value": "CNXAM"
       }
     },
     {
@@ -388,7 +388,7 @@
       },
       "ff0a74ce0a164d259adc7b11eeb77334": {
         "busy": false,
-        "value": "CNSHA"
+        "value": "CNSHG"
       }
     },
     {
@@ -503,7 +503,7 @@
       },
       "ff0a74ce0a164d259adc7b11eeb77334": {
         "busy": false,
-        "value": "CNTAO"
+        "value": "CNQDG"
       }
     },
     {
@@ -5886,6 +5886,52 @@
       "ff0a74ce0a164d259adc7b11eeb77334": {
         "busy": false,
         "value": "CNDCB"
+      }
+    },
+    {
+      "id": 660422,
+      "4d2dcfcddc4a455da825e2c2e6add574": {
+        "busy": false,
+        "value": "Livorno"
+      },
+      "325b578fadab499c8ada312db400fa6c": {
+        "busy": false,
+        "value": "Italy"
+      },
+      "3243e480517548c3ba1ef6bd3ef1fbdd": {
+        "busy": false,
+        "value": null
+      },
+      "44a2221218314e1e8359a19a98fe72a1": {
+        "busy": false,
+        "value": 660422
+      },
+      "ff0a74ce0a164d259adc7b11eeb77334": {
+        "busy": false,
+        "value": null
+      }
+    },
+    {
+      "id": 660434,
+      "4d2dcfcddc4a455da825e2c2e6add574": {
+        "busy": false,
+        "value": "Muscat"
+      },
+      "325b578fadab499c8ada312db400fa6c": {
+        "busy": false,
+        "value": null
+      },
+      "3243e480517548c3ba1ef6bd3ef1fbdd": {
+        "busy": false,
+        "value": null
+      },
+      "44a2221218314e1e8359a19a98fe72a1": {
+        "busy": false,
+        "value": 660434
+      },
+      "ff0a74ce0a164d259adc7b11eeb77334": {
+        "busy": false,
+        "value": null
       }
     }
   ]

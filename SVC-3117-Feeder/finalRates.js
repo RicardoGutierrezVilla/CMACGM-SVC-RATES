@@ -92,7 +92,7 @@ async function sendServiceToMicroservice(polName, podName, serviceId, serviceNam
 
 async function sendRatesToEndpoint(rates, indices, sheetName) {
     try {
-        const response = await fetch('https://hook.us1.make.com/pb3chu1cv36412wo9nzjeupbwo5ucvsw', {
+        const response = await fetch('http://localhost:3001', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -112,7 +112,7 @@ async function sendRatesToEndpoint(rates, indices, sheetName) {
     }
 }
 
-async function createFinalRates(finalRates, contractEffectiveDate, contractExpirationDate, sheetName = 'Unknown') {
+async function createFinalRates(finalRates, contractEffectiveDate, contractExpirationDate, sheetName = 'Unknown', uswcSurchargeDescriptions = []) {
     const timestamp = new Date().toISOString();
 
     // Initialize counters and tracking
@@ -131,7 +131,8 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
     let apiSkippedCount = 0;
     let microserviceUpdateCount = 0;
     const maxApiCallsPerRun = 30;
-    const maxRatesToSendPerRun = 100; 
+    const maxRatesToSendPerRun = 0; 
+    const resendAllRates = true; 
     const missingServices = [];
     const newSheetEntries = [];
     const skippedApiRates = [];
@@ -315,7 +316,7 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
                 port_destination: rate['Place of Delivery'] || '',
                 port_origin: rate.POL || '',
                 port_discharge: rate.POD || '',
-                port_origin_name: rate.polName || '',
+                port_origin_name: rate["Place of Receipt"] || rate.polName || '',
                 port_discharge_name: rate.podName || '',
                 vf: contractEffectiveDate || '',
                 vt: contractExpirationDate || '',
@@ -326,8 +327,10 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
                 "20p": rate.D20 || '',
                 service: rate.service || '',
                 service_name: rate.service_name || '',
-                contract: "38",
-                carrier_contract_number: "SVC3118"
+                contract: "39",
+                carrier_contract_number: "SVC3117",
+                surcharge_descriptions: Array.isArray(uswcSurchargeDescriptions) ? uswcSurchargeDescriptions : [],
+                sheet_name: sheetName || ''
             };
             jsonRates.push(jsonRate);
         }
@@ -341,76 +344,66 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
     console.log(`UnprocessedRatesToEndpoint.csv generated/updated for ${sheetName} with ${unprocessedRates.length} rates.`);
 
     // Step 6: Write FinalRatesToEndpoint.json with timestamp, containing all jsonRates
-    const finalRatesWithTimestamp = {
-        timestamp: timestamp,
+    const output = {
+        timestamp,
+        sheet_name: sheetName || '',
+        count: jsonRates.length,
         rates: jsonRates
     };
-    fs.writeFileSync('FinalRatesToEndpoint.json', JSON.stringify(finalRatesWithTimestamp, null, 2), 'utf8');
+    fs.writeFileSync('FinalRatesToEndpoint.json', JSON.stringify(output, null, 2), 'utf8');
     console.log(`FinalRatesToEndpoint.json generated/updated for ${sheetName} with ${jsonRates.length} rates.`);
 
     // Step 6.1: Write SingleRateWithTimestamp.json with one rate and timestamp
     const singleRate = jsonRates.length > 0 ? jsonRates[0] : {};
     const singleRateWithTimestamp = {
         timestamp: timestamp,
+        sheet_name: sheetName || '',
         rate: singleRate
     };
     fs.writeFileSync('SingleRateWithTimestamp.json', JSON.stringify(singleRateWithTimestamp, null, 2), 'utf8');
     console.log(`SingleRateWithTimestamp.json generated with ${jsonRates.length > 0 ? '1 rate' : 'empty rate'}.`);
 
-    // Step 7: Send up to 200 rates to endpoint
-    let sentRateIndices = trackingState.sentRateIndices;
-    const ratesSentThisRun = Math.min(jsonRates.length - sentRateIndices.length, maxRatesToSendPerRun);
-    const unsentRates = jsonRates.filter((_, index) => !sentRateIndices.includes(index));
-    const ratesToSend = unsentRates.slice(0, maxRatesToSendPerRun);
-    const indicesToSend = jsonRates
-        .map((rate, index) => ratesToSend.includes(rate) ? index : -1)
-        .filter(index => index !== -1);
+    // Step 7: Send rates honoring maxRatesToSendPerRun (0 means send none)
+    const batchSize = 1000;
+    const effectiveMax = Number.isFinite(maxRatesToSendPerRun) ? Math.max(0, maxRatesToSendPerRun) : 0;
+    const ratesPool = effectiveMax === 0 ? [] : jsonRates.slice(0, effectiveMax);
+    let totalSent = 0;
 
-    if (ratesToSend.length > 0) {
-        console.log(`Attempting to send ${ratesToSend.length} rates for ${sheetName}...`);
-        const success = await sendRatesToEndpoint(ratesToSend, indicesToSend, sheetName);
-        if (success) {
-            sentRateIndices.push(...indicesToSend);
-            trackingState.sentRateIndices = sentRateIndices;
-            trackingState.totalRatesSent += ratesToSend.length;
-            // Save trackingState to file
-            fs.writeFileSync(trackingStateFile, JSON.stringify(trackingState, null, 2), 'utf8');
+    if (effectiveMax === 0) {
+        console.log(`maxRatesToSendPerRun is 0 for ${sheetName}; skipping send to endpoint.`);
+    }
+
+    for (let i = 0; i < ratesPool.length; i += batchSize) {
+        const batch = ratesPool.slice(i, i + batchSize);
+        let success = false;
+        let attempts = 0;
+        while (!success && attempts < 3) {
+            attempts++;
+            console.log(`Attempting to send batch ${Math.floor(i / batchSize) + 1} (${batch.length} rates) for ${sheetName}... (Attempt ${attempts})`);
+            success = await sendRatesToEndpoint(batch, batch.map((_, idx) => i + idx), sheetName);
+            if (!success) {
+                console.error(`Failed to send batch ${Math.floor(i / batchSize) + 1} (Attempt ${attempts}) for ${sheetName}.`);
+                if (attempts < 3) {
+                    console.log('Retrying after 2 seconds...');
+                    await delay(2000);
+                }
+            }
         }
-    } else {
-        console.log(`All rates have been sent to the endpoint for ${sheetName}.`);
+        if (success) {
+            totalSent += batch.length;
+        } else {
+            console.error(`Giving up on batch ${Math.floor(i / batchSize) + 1} after 3 attempts.`);
+        }
     }
-
-    // Calculate rates remaining
-    let ratesRemainingToSend = jsonRates.length - sentRateIndices.length;
-    let resetMessage = '';
-    if (ratesRemainingToSend <= 0) {
-        ratesRemainingToSend = 0;
-        resetMessage = `All rates sent for ${sheetName}. Resetting sentRateIndices for the next sheet.`;
-        console.log(resetMessage);
-        sentRateIndices = [];
-        trackingState.sentRateIndices = [];
-        trackingState.totalRatesSent = 0; // Reset cumulative total for the sheet
-        // Save reset trackingState
-        fs.writeFileSync(trackingStateFile, JSON.stringify(trackingState, null, 2), 'utf8');
-    }
-    if (ratesRemainingToSend < 0) {
-        console.warn(`Warning: Rates remaining to send is negative for ${sheetName}, indicating a tracking error. Resetting to 0.`);
-        ratesRemainingToSend = 0;
-        sentRateIndices = [];
-        trackingState.sentRateIndices = [];
-        // Save reset trackingState
-        fs.writeFileSync(trackingStateFile, JSON.stringify(trackingState, null, 2), 'utf8');
-    }
+    console.log(`Total rates sent for ${sheetName}: ${totalSent}`);
 
     // Step 8: Log statistics
     console.log(`\nRates Sent Statistics for ${sheetName}:`);
-    console.log(`- Rates sent this run: ${ratesSentThisRun}`);
-    console.log(`- Total rates sent: ${trackingState.totalRatesSent}`);
-    console.log(`- Rates remaining to send: ${ratesRemainingToSend}`);
+    console.log(`- Rates sent this run: ${totalSent}`);
+    console.log(`- Total rates sent: 0`);
+    console.log(`- Rates remaining to send: ${jsonRates.length - totalSent}`);
     console.log(`- Unprocessed rates (missing POL or POD): ${unprocessedRates.length}`);
-    if (resetMessage) {
-        console.log(`- ${resetMessage}`);
-    }
+    // Removed resetMessage references for clean exit
 
     // Log missing port_origin_names
     if (missingFieldsCount.port_origin_names.length > 0) {

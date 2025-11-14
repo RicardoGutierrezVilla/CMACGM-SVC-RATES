@@ -1,9 +1,8 @@
 const XLSX = require('xlsx');
 const fs = require('fs');
-// Note: `node-fetch` may trigger a `punycode` deprecation warning in Node.js 18+.
-// Consider using `undici` (Node.js built-in fetch) as an alternative if needed.
 const fetch = require('node-fetch');
 const { login } = require('./auth.js');
+
 
 async function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -92,7 +91,8 @@ async function sendServiceToMicroservice(polName, podName, serviceId, serviceNam
 
 async function sendRatesToEndpoint(rates, indices, sheetName) {
     try {
-        const response = await fetch('https://hook.us1.make.com/pb3chu1cv36412wo9nzjeupbwo5ucvsw', {
+        const endpoint = 'http://localhost:3001';
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -101,21 +101,33 @@ async function sendRatesToEndpoint(rates, indices, sheetName) {
             timeout: 10000
         });
         if (!response.ok) {
-            console.error(`Failed to send ${rates.length} rates to endpoint for ${sheetName}: HTTP ${response.status}`);
+            let bodyText = '';
+            try { bodyText = await response.text(); } catch (e) { /* noop */ }
+            console.error(`Failed to send ${rates.length} rates to endpoint for ${sheetName}: HTTP ${response.status} ${response.statusText || ''}`.trim());
+            if (bodyText) {
+                console.error(`Endpoint response body (${sheetName}): ${bodyText.substring(0, 500)}`);
+            }
             return false;
         }
         console.log(`Successfully sent ${rates.length} rates to endpoint for ${sheetName}`);
         return true;
     } catch (error) {
         console.error(`Error sending ${rates.length} rates to endpoint for ${sheetName}: ${error.message}`);
+        if (error.stack) console.error(error.stack.split('\n').slice(0, 2).join('\n'));
         return false;
     }
 }
 
-async function createFinalRates(finalRates, contractEffectiveDate, contractExpirationDate, sheetName = 'Unknown') {
+async function createFinalRates(finalRates, contractEffectiveDate, contractExpirationDate, sheetName = 'Unknown', uswcSurchargeDescriptions = [], options = {}) {
+    
     const timestamp = new Date().toISOString();
 
-    // Initialize counters and tracking
+    const {
+        limitTo = null,            
+        sendAllRates: sendAllOpt,  
+    } = options || {};
+
+    // Initializing counters and tracking
     const missingFieldsCount = {
         port_destination: 0,
         port_origin: 0,
@@ -124,24 +136,31 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
         port_origin_names: [],
         missing_service_routes: []
     };
+
+    // Declaring counters
     let sheetMatchCount = 0;
     let apiMatchCount = 0;
     let apiCallCount = 0;
     let apiFailedCount = 0;
     let apiSkippedCount = 0;
     let microserviceUpdateCount = 0;
+
+    // Limits
     const maxApiCallsPerRun = 30;
-    const maxRatesToSendPerRun = 9000;
-    const sendAllRates = true; // set it to true to send rates from index 0 
+    const maxRatesToSendPerRun = 1000;
+    const sendAllRates = (typeof sendAllOpt === 'boolean') ? sendAllOpt : true; // default true
     const missingServices = [];
     const newSheetEntries = [];
     const skippedApiRates = [];
     const unprocessedRates = [];
 
-    // Load tracking state from file to persist across runs
+    // Load tracking state
     let trackingState;
     const trackingStateFile = 'trackingState.json';
+
     if (fs.existsSync(trackingStateFile)) {
+
+        // Tracking state validation
         try {
             trackingState = JSON.parse(fs.readFileSync(trackingStateFile, 'utf8'));
             // Validate trackingState
@@ -159,6 +178,7 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
 
     // Authenticate with Betty Blocks API
     let jwtToken;
+
     try {
         const { jwtToken: token } = await login();
         jwtToken = token;
@@ -176,7 +196,7 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
         process.exit(1);
     }
 
-    // Step 1: Check Google Sheet for service IDs
+    // Step 1: Check Google Sheet to fetch service IDs
     const ratesToProcessViaApi = [];
     for (const rate of finalRates) {
         const { serviceId, serviceName } = await findServiceIdAndName(rate.polName, rate.podName, sheetData);
@@ -328,7 +348,9 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
                 service: rate.service || '',
                 service_name: rate.service_name || '',
                 contract: "39",
-                carrier_contract_number: "SVC3117"
+                carrier_contract_number: "SVC3117",
+                surcharge_descriptions: Array.isArray(uswcSurchargeDescriptions) ? uswcSurchargeDescriptions : [],
+                sheet_name: sheetName || ''
             };
             jsonRates.push(jsonRate);
         }
@@ -344,6 +366,7 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
     // Step 6: Write FinalRatesToEndpoint.json with timestamp, containing all jsonRates
     const finalRatesWithTimestamp = {
         timestamp: timestamp,
+        sheet_name: sheetName || '',
         rates: jsonRates
     };
     fs.writeFileSync('FinalRatesToEndpoint.json', JSON.stringify(finalRatesWithTimestamp, null, 2), 'utf8');
@@ -353,6 +376,7 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
     const singleRate = jsonRates.length > 0 ? jsonRates[0] : {};
     const singleRateWithTimestamp = {
         timestamp: timestamp,
+        sheet_name: sheetName || '',
         rate: singleRate
     };
     fs.writeFileSync('SingleRateWithTimestamp.json', JSON.stringify(singleRateWithTimestamp, null, 2), 'utf8');
@@ -366,9 +390,10 @@ async function createFinalRates(finalRates, contractEffectiveDate, contractExpir
         trackingState.sentRateIndices = [];
         trackingState.totalRatesSent = 0;
     }
-    const ratesSentThisRun = Math.min(jsonRates.length - sentRateIndices.length, maxRatesToSendPerRun);
+    const effectiveMax = limitTo && Number.isFinite(limitTo) ? Math.min(maxRatesToSendPerRun, Math.max(0, limitTo)) : maxRatesToSendPerRun;
+    const ratesSentThisRun = Math.min(jsonRates.length - sentRateIndices.length, effectiveMax);
     const unsentRates = jsonRates.filter((_, index) => !sentRateIndices.includes(index));
-    const ratesToSend = unsentRates.slice(0, maxRatesToSendPerRun);
+    const ratesToSend = unsentRates.slice(0, effectiveMax);
     const indicesToSend = jsonRates
         .map((rate, index) => ratesToSend.includes(rate) ? index : -1)
         .filter(index => index !== -1);

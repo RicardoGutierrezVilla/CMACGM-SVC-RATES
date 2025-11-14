@@ -1,20 +1,20 @@
 {
-  "timestamp": "2025-11-14T00:06:21.075Z",
-  "sheet_name": "ISCUSWC",
+  "timestamp": "2025-11-14T00:11:23.762Z",
+  "sheet_name": "USWC",
   "rate": {
     "carrier": "653309",
     "port_destination": 648392,
-    "port_origin": 649160,
+    "port_origin": "653453",
     "port_discharge": 648392,
-    "port_origin_name": "CHENNAI",
+    "port_origin_name": "PHNOM PENH",
     "port_discharge_name": "LOS ANGELES",
     "vf": "2025-02-15",
     "vt": "2025-12-31",
     "transit_time": "",
     "rate_source": "653309",
-    "40p": 1900,
-    "40hqp": 1900,
-    "20p": 1520,
+    "40p": 2100,
+    "40hqp": 2100,
+    "20p": 1800,
     "service": "335",
     "service_name": "Columbus JAX (CJX)",
     "contract": "39",
@@ -25,6 +25,7 @@
       "Carrier Security Charge",
       "Container Maintenance Charge Destination",
       "Export Documentation Fees - Carrier",
+      "Export Declaration Surcharge",
       "Export Seal Fee",
       "General Rate Increase",
       "Hazardous Fees (Ocean)",
@@ -36,6 +37,6 @@
       "Destination Terminal Security Charge",
       "Tri-Axle / Super Chassis Oncarriage Surcharge"
     ],
-    "sheet_name": "ISCUSWC"
+    "sheet_name": "USWC"
   }
 }

@@ -1,4 +1,6 @@
 {
-  "sentRateIndices": [],
-  "totalRatesSent": 0
+  "sentRateIndices": [
+    0
+  ],
+  "totalRatesSent": 1
 }

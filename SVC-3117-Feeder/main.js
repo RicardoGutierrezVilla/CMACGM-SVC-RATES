@@ -1,14 +1,37 @@
 const XLSX = require('xlsx');
+const axios = require('axios');
+const fs = require('fs');
 const { login } = require('./auth');
 const { fetchAndSaveLocations } = require('./locations');
 const { processCoverSheet } = require('./coverSheet');
 const { processUSWCSheet } = require('./uswcSheet');
-const { processUSECSheet } = require('./usecSheet');
 const { processServiceIDs } = require('./serviceIDs');
 const { createFinalRates } = require('./finalRates');
+const { processUSECSheet } = require('./usecSheet');
+
+async function downloadRatesheet() {
+    const url = 'https://www.primefreight.com/cma_rates/ratesheet.xlsx';
+    const localPath = './ratesheet.xlsx';
+    
+    try {
+        console.log('Downloading ratesheet from:', url);
+        const response = await axios({
+            method: 'GET',
+            url: url,
+            responseType: 'arraybuffer'
+        });
+        
+        fs.writeFileSync(localPath, response.data);
+        console.log('Ratesheet downloaded successfully to:', localPath);
+        return localPath;
+    } catch (error) {
+        console.error('Error downloading ratesheet:', error.message);
+        throw error;
+    }
+}
 
 async function main() {
-    const processMode = 'BOTH'; // Can be 'USWC', 'USEC', or 'BOTH'
+    const processMode = 'USWC'; // Can be 'USWC', 'USEC', or 'BOTH'
     const timestamp = new Date().toISOString();
 
     try {
@@ -20,18 +43,19 @@ async function main() {
         // Fetch and save locations
         await fetchAndSaveLocations();
 
-        // Read the workbook
-        const workbook = XLSX.readFile('./CMACGM3118.xlsx');
+        // Download and read the workbook
+        const ratesheetPath = await downloadRatesheet();
+        const workbook = XLSX.readFile(ratesheetPath);
 
         // Process cover sheet for contract dates
         const { contractEffectiveDate, contractExpirationDate } = await processCoverSheet(workbook);
-
         let uswcRates = [];
         let usecRates = [];
         let uswcPreDictRates = [];
         let usecPreDictRates = [];
         let uswcPostDictRates = [];
         let usecPostDictRates = [];
+        let uswcSurchargeDescriptions = [];
 
         // Process USWC rates
         if (processMode === 'USWC' || processMode === 'BOTH') {
@@ -39,18 +63,19 @@ async function main() {
             uswcRates = uswcResult.processedRates;
             uswcPreDictRates = uswcResult.preDictionaryRates;
             uswcPostDictRates = uswcResult.postDictionaryRates;
+            uswcSurchargeDescriptions = uswcResult.uswcSurchargeDescriptions || [];
 
             // Write PreDictionaryRates.csv for USWC
             const wsUSWCPre = XLSX.utils.json_to_sheet(uswcPreDictRates);
             const csvUSWCPre = XLSX.utils.sheet_to_csv(wsUSWCPre);
             const csvUSWCPreWithTs = `Timestamp,${timestamp}\n${csvUSWCPre}`;
-            require('fs').writeFileSync('PreDictionaryRates.csv', csvUSWCPreWithTs, 'utf8');
+            fs.writeFileSync('PreDictionaryRates.csv', csvUSWCPreWithTs, 'utf8');
 
             // Write PostDictionaryRates.csv for USWC
             const wsUSWCPost = XLSX.utils.json_to_sheet(uswcPostDictRates);
             const csvUSWCPost = XLSX.utils.sheet_to_csv(wsUSWCPost);
             const csvUSWCPostWithTs = `Timestamp,${timestamp}\n${csvUSWCPost}`;
-            require('fs').writeFileSync('PostDictionaryRates.csv', csvUSWCPostWithTs, 'utf8');
+            fs.writeFileSync('PostDictionaryRates.csv', csvUSWCPostWithTs, 'utf8');
         }
 
         // Process USEC rates
@@ -59,17 +84,23 @@ async function main() {
             usecRates = usecResult.processedRates;
             usecPreDictRates = usecResult.preDictionaryRates;
             usecPostDictRates = usecResult.postDictionaryRates;
+            // Merge surcharge descriptions from USEC feeder
+            const usecSurcharges = usecResult.uswcSurchargeDescriptions || [];
+            if (usecSurcharges.length > 0) {
+                const merged = Array.from(new Set([...(uswcSurchargeDescriptions || []), ...usecSurcharges]));
+                uswcSurchargeDescriptions = merged;
+            }
 
             // Write PreDictionaryRates.csv for USEC (append or create)
             const wsUSECPre = XLSX.utils.json_to_sheet(usecPreDictRates);
             const csvUSECPre = XLSX.utils.sheet_to_csv(wsUSECPre);
             const csvUSECPreWithTs = `Timestamp,${timestamp}\n${csvUSECPre}`;
             const preDictFile = 'PreDictionaryRates.csv';
-            if (require('fs').existsSync(preDictFile) && processMode === 'BOTH') {
-                const existingPreDict = require('fs').readFileSync(preDictFile, 'utf8').split('\n').slice(1).join('\n');
-                require('fs').writeFileSync(preDictFile, `Timestamp,${timestamp}\n${existingPreDict}\n${csvUSECPre.split('\n').slice(1).join('\n')}`, 'utf8');
+            if (fs.existsSync(preDictFile) && processMode === 'BOTH') {
+                const existingPreDict = fs.readFileSync(preDictFile, 'utf8').split('\n').slice(1).join('\n');
+                fs.writeFileSync(preDictFile, `Timestamp,${timestamp}\n${existingPreDict}\n${csvUSECPre.split('\n').slice(1).join('\n')}`, 'utf8');
             } else {
-                require('fs').writeFileSync(preDictFile, csvUSECPreWithTs, 'utf8');
+                fs.writeFileSync(preDictFile, csvUSECPreWithTs, 'utf8');
             }
 
             // Write PostDictionaryRates.csv for USEC (append or create)
@@ -77,11 +108,11 @@ async function main() {
             const csvUSECPost = XLSX.utils.sheet_to_csv(wsUSECPost);
             const csvUSECPostWithTs = `Timestamp,${timestamp}\n${csvUSECPost}`;
             const postDictFile = 'PostDictionaryRates.csv';
-            if (require('fs').existsSync(postDictFile) && processMode === 'BOTH') {
-                const existingPostDict = require('fs').readFileSync(postDictFile, 'utf8').split('\n').slice(1).join('\n');
-                require('fs').writeFileSync(postDictFile, `Timestamp,${timestamp}\n${existingPostDict}\n${csvUSECPost.split('\n').slice(1).join('\n')}`, 'utf8');
+            if (fs.existsSync(postDictFile) && processMode === 'BOTH') {
+                const existingPostDict = fs.readFileSync(postDictFile, 'utf8').split('\n').slice(1).join('\n');
+                fs.writeFileSync(postDictFile, `Timestamp,${timestamp}\n${existingPostDict}\n${csvUSECPost.split('\n').slice(1).join('\n')}`, 'utf8');
             } else {
-                require('fs').writeFileSync(postDictFile, csvUSECPostWithTs, 'utf8');
+                fs.writeFileSync(postDictFile, csvUSECPostWithTs, 'utf8');
             }
         }
 
@@ -92,7 +123,7 @@ async function main() {
         await processServiceIDs(workbook);
 
         // Generate final rates for endpoint
-        await createFinalRates(allRates, contractEffectiveDate, contractExpirationDate, processMode);
+        await createFinalRates(allRates, contractEffectiveDate, contractExpirationDate, processMode, uswcSurchargeDescriptions);
 
         console.log(`Processing completed successfully for ${processMode}.`);
 
